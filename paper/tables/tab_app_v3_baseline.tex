@@ -1,0 +1,18 @@
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{llrrrrr}
+\toprule
+DGP & Feature set & PR-AUC & ROC-AUC & \texttt{latent\_corr} & \texttt{cooc\_mean} & $n$ \\
+\midrule
+A & F0 & 0.1679 & 0.7544 & 0.7074 & 0.5596 & 12 \\
+A & F1 & 0.2381 & 0.8154 & 0.8146 & 0.0000 & 12 \\
+B & F0 & 0.1949 & 0.7872 & 0.7844 & 0.9551 & 12 \\
+B & F1 & 0.1970 & 0.7907 & 0.7830 & 0.0206 & 12 \\
+\bottomrule
+\end{tabular}
+\caption{Baseline (C0, $s=1.0$) test metrics used to compute relative deltas in Tables~\ref{tab:app_v3_f0}--\ref{tab:app_v3_f1}. DGP A is continuous log ratio; DGP B is count plus exposure.}
+\label{tab:app_v3_baseline}
+\end{table}

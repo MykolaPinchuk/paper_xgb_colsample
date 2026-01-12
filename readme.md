@@ -1,3 +1,0 @@
-## XGB colsample ratio project
-
-

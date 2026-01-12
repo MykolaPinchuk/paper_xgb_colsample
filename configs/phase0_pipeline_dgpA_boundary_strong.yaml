@@ -1,0 +1,67 @@
+seed_master: 123
+
+compute:
+  reserve_cpus: 2
+  xgb_threads: null
+
+data:
+  n_train: 25000
+  n_valid: 10000
+  n_test: 10000
+  prevalence_target: 0.05
+
+scenarios:
+  dgp_name: continuous_logratio
+  n_scenarios: 8
+  n_reps: 2
+  apply_acceptance_filter: true
+
+dgp:
+  continuous_logratio:
+    input_representation: log
+    dist_variant: [normal]
+    sigma_v: 1.0
+    kappa_sigmaU_over_sigmaV: [12.0]
+    sigma_eps: [0.05]
+    beta: [1.4]
+    distractors:
+      p_u: 0
+      u_noise_scale_mult: 1.0
+      p_noise: 120
+      noise_scale_mult: 1.0
+
+acceptance:
+  best1d_max_features: 30
+  min_oracle_minus_best1d_rocauc: 0.05
+  min_oracle_minus_best1d_prauc: 0.02
+  min_xgb_closes_oracle_gap_frac: 0.35
+  min_xgb_closes_oracle_gap_frac_prauc: 0.20
+  feasibility:
+    max_depth: 7
+    n_estimators: 700
+    early_stopping_rounds: 40
+    fixed_overrides:
+      min_child_weight: 1
+      subsample: 1.0
+
+xgb:
+  fixed:
+    tree_method: hist
+    learning_rate: 0.05
+    subsample: 0.8
+    colsample_bytree: 1.0
+    min_child_weight: 30
+    reg_lambda: 1.0
+    max_bin: 256
+    objective: binary:logistic
+  depths: [4]
+  colsamp_s: [1.0, 0.9, 0.8]
+  colsamp_arms: [C0, C3]
+  regimes:
+    - name: early_stopping
+      n_estimators: 1200
+      early_stopping: true
+      early_stopping_rounds: 30
+
+diagnostics:
+  path_cooccurrence: true

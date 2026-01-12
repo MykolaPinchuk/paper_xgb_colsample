@@ -1,0 +1,462 @@
+
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{pdflscape}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
+\usepackage{hyperref}
+\usepackage{natbib}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue
+}
+
+\title{Intra-tree Column Subsampling Hinders XGBoost Learning of Ratio-like Interactions}
+\author{Mykola Pinchuk, PhD\thanks{Email: \texttt{pinchumkykola@gmail.com}. Companion repository (code and materials): \url{https://github.com/MykolaPinchuk/paper_xgb_colsample}.}\\Independent Researcher\\San Jose, USA}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Many applied problems contain signal that becomes clear only after combining multiple raw measurements.
+Ratios and rates are common examples.
+In gradient boosted trees, this combination is not an explicit operation.
+The model must synthesize it through coordinated splits on the component features.
+This paper studies whether intra-tree column subsampling in XGBoost makes that synthesis harder.
+
+Two synthetic data generating processes represent cancellation-style structure.
+In both, two primitives share a strong nuisance factor, while the target depends on a smaller differential factor.
+A log ratio of the primitives cancels the nuisance and isolates the signal.
+Experiments vary \texttt{colsample\_bylevel} and \texttt{colsample\_bynode} over $s \in \{0.4, 0.6, 0.8, 0.9\}$, with emphasis on the mild range $s\ge 0.8$.
+A control feature set includes the engineered ratio, which removes the need for synthesis.
+
+Across both data generating processes, intra-tree column subsampling reduces test PR AUC in the primitives only setting. In the main data generating process such a relative decrease in PR AUC performance reaches 54\% when both hyperparameters are set to 0.4.
+The effect largely disappears when the engineered ratio is present.
+A path-based co-usage metric drops in the same cells where performance deteriorates.
+These results support a practical recommendation.
+If ratio-like structure is plausible, either avoid intra-tree column subsampling or include the intended ratio features.
+\end{abstract}
+
+\section{Introduction}
+
+Tree-based models are a default choice in many applied machine learning settings.
+XGBoost is widely used due to its accuracy and training efficiency \citep{chen2016xgboost}.
+Practitioners often tune row subsampling and column subsampling to improve generalization.
+
+Many real features are built from primitives.
+Rates, ratios, and log ratios are common.
+Advertising uses click through rate.
+Operations uses defect rate.
+Fraud modeling uses rates such as chargebacks per exposure.
+In these cases, the primitives often share a large nuisance factor.
+Exposure and scale are common examples.
+
+If the model receives only primitives, it must combine them to cancel the nuisance.
+If intra-tree column subsampling hides one primitive at a critical split, that combination can fail.
+This paper focuses on this failure mode.
+
+\begin{quote}
+\noindent\textbf{Claim for practitioners.} Intra-tree column subsampling can hinder learning of important multi-feature interactions.
+This paper establishes the effect for ratio-like and rate-like interactions that require combining multiple primitives to remove a shared nuisance factor.
+\end{quote}
+
+\section{Background}
+
+\subsection{Column subsampling in XGBoost}
+
+XGBoost supports three column subsampling parameters.
+\texttt{colsample\_bytree} samples features once per tree.
+\texttt{colsample\_bylevel} samples features once per depth level.
+\texttt{colsample\_bynode} samples features independently at each node.
+
+This paper studies \texttt{colsample\_bylevel} and \texttt{colsample\_bynode}.
+Both change feature availability within a tree.
+This matters when a good decision path needs coordinated access to multiple primitives.
+
+A commonly used feature availability calculation can be misleading for trees.
+At a single node, if a node samples a fraction $s$ of features, then a specific pair is both available with probability close to $s^2$ when the feature count is large.
+A ratio-like interaction does not require both primitives to be available at the same node.
+If a tree splits on $a$ at some depth, it only needs $b$ to be available at a descendant node.
+
+Under \texttt{colsample\_bynode}, a feature is available at each node with probability close to $s$.
+Along a path of length $L$, the probability that $b$ is available at least once is $1-(1-s)^L$.
+For typical depths, this can be close to one even for $s=0.8$.
+Therefore, a strict $s^2$ availability argument is too pessimistic.
+
+The practical issue is greedy search under stochastic feature masking.
+If the best split at a node uses a feature that is masked, the tree commits to a different partition.
+This choice changes which subregions exist downstream.
+It can remove opportunities for later splits to reconstruct the intended composite.
+This sensitivity grows when the interaction is needed early in the tree, and when many distractor features compete for split gain.
+This paper treats intra-tree column subsampling as search noise, not as a simultaneous availability constraint.
+
+\subsection{Related work}
+
+Randomization has a long history in tree ensembles as a way to reduce variance, decorrelate trees, and improve generalization.
+Random forests sample features at each split \citep{breiman2001rf}, and extremely randomized trees introduce additional split randomization \citep{geurts2006extratrees}.
+In gradient boosting, stochastic variants use subsampling to regularize stagewise fitting \citep{friedman2002stochastic}, and modern GBDT toolkits (XGBoost, LightGBM) expose both row and column subsampling controls for speed and generalization \citep{chen2016xgboost,ke2017lightgbm}.
+Most of this literature emphasizes accuracy and efficiency, but gives little guidance on when within-tree feature masking can interfere with learning specific interaction structures.
+
+Ratios, rates, and log-ratios are ubiquitous engineered features in applied modeling because they can normalize away shared exposure or scale effects.
+In compositional data analysis, log-ratio transforms are a standard tool for removing common-scale degrees of freedom \citep{aitchison1982compositional}.
+For tree models, interactions are represented implicitly via axis-aligned partitions. Expressing a composite such as a ratio from raw primitives may require coordinated splits and sufficient depth \citep{hastie2009esl}.
+This paper connects these themes by isolating a cancellation-style setting where the intended signal is concentrated in a (log-)ratio.
+It quantifies how intra-tree column subsampling can add search noise that disrupts that coordination.
+
+This paper studies cancellation-style interactions.
+Two primitives share a strong nuisance factor $U$.
+They carry opposite signed signal $V$.
+A log ratio cancels $U$.
+
+A canonical continuous construction is:
+\begin{align}
+\log a &= U + V + \epsilon_a, \\
+\log b &= U - V + \epsilon_b, \\
+r &= \log a - \log b \approx 2V + (\epsilon_a - \epsilon_b).
+\end{align}
+
+The target depends on $V$, not on $U$.
+The model receives either $(a,b)$ or $(a,b,r)$.
+When $r$ is included, the intended interaction is provided.
+
+\section{Experimental setup}
+
+\subsection{Feature sets}
+
+Two feature sets isolate the role of synthesis.
+\begin{itemize}
+\item \texttt{F0}: primitives only.
+\item \texttt{F1}: primitives plus the engineered ratio feature.
+\end{itemize}
+
+In both cases, the model also receives noise features.
+These distractors are correlated with the nuisance factor.
+In all experiments, there are two signal primitives and $p_{\mathrm{noise}}=120$ distractors.
+In F1, the engineered ratio feature adds one more feature.
+Therefore, the feature counts are 122 for F0 and 123 for F1.
+
+The datasets use train=25{,}000, validation=10{,}000, and test=10{,}000 examples.
+The test prevalence is fixed at $\pi=0.05$. Thus, the results in this paper generalize to the imbalanced classification problems common in practice.
+A random ranking has expected PR-AUC equal to $\pi$.
+This paper reports absolute PR-AUC deltas, and also reports relative deltas in the Appendix.
+
+
+
+\subsection{Column subsampling arms}
+
+A baseline configuration uses no intra-tree column subsampling.
+Arms apply within-tree subsampling with $s \in \{0.4, 0.6, 0.8, 0.9\}$.
+\begin{itemize}
+\item \texttt{C0}: \texttt{colsample\_bylevel=1.0}, \texttt{colsample\_bynode=1.0}.
+\item \texttt{C1}: \texttt{colsample\_bylevel=$s$}, \texttt{colsample\_bynode=1.0}.
+\item \texttt{C2}: \texttt{colsample\_bylevel=1.0}, \texttt{colsample\_bynode=$s$}.
+\item \texttt{C3}: \texttt{colsample\_bylevel=$s$}, \texttt{colsample\_bynode=$s$}.
+\end{itemize}
+
+\subsection{Data generating processes}
+
+Two data generating processes are used.
+
+\noindent DGP-A (continuous log ratio).
+Latents $U$ and $V$ generate primitives $a$ and $b$ as in the equations above.
+The engineered control feature is $r=\log a - \log b$.
+
+\noindent DGP-B (count plus exposure).
+An exposure latent $E$ is shared by two count variables.
+A differential latent $V$ changes their rates in opposite directions.
+The engineered control feature is a smoothed log rate difference, written as $\log(A+s_0) - \log(B+s_0)$.
+The smoothing constant $s_0$ avoids issues at low counts.
+
+\subsection{Metrics}
+
+The primary metric is test PR AUC.
+Secondary metrics (including ROC AUC) support interpretation.
+All results are paired deltas against a matched baseline with no intra-tree column subsampling (C0, $s=1.0$).
+The paper reports the mean paired delta across replicated runs.
+Uncertainty intervals are normal approximation 95\% confidence intervals on this mean.
+Appendix \ref{app:ci} gives the exact formula.
+
+
+
+\noindent Path co-usage.
+\texttt{cooc\_path\_mean} measures how often both primitives appear on the same root to leaf path.
+Paths are weighted by cover.
+A model that relies on the cancellation interaction should use both primitives along important paths.
+
+\noindent Latent alignment.
+\texttt{latent\_corr} is the correlation between the model score and the true latent signal $V$ on the test set.
+This is available because the data are synthetic.
+
+\section{Results}
+
+Figure \ref{fig:dgpA_main} summarizes DGP-A in the primitives-only setting (F0).
+As the within-tree sampling rate $s$ decreases, test PR-AUC declines and the path co-usage metric shifts in tandem.
+The degradation is the largest when both \texttt{colsample\_bylevel} and \texttt{colsample\_bynode} are active (C3), consistent with subsampling disrupting coordinated use of the two primitives.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{assets/fig_main_dgpA_f0_dual_axis_c1c2c3.pdf}
+\caption{DGP-A (primitives only, F0). Relative change in test PR-AUC (left axis) and change in path co-usage (right axis) as a function of the within-tree sampling rate $s$ for arms C1--C3.}
+\label{fig:dgpA_main}
+\end{figure}
+
+Table \ref{tab:main_dgpA_c3} focuses on the strongest subsampling arm (C3) and contrasts F0 with the engineered-feature control (F1).
+In F0, C3 reduces PR-AUC by 0.010 at $s=0.8$ and 0.007 at $s=0.9$ (6.1\% and 4.2\% relative to the corresponding baselines).
+When $s$ is pushed lower, the performance drop grows rapidly (down to $\Delta$PR-AUC=-0.090 at $s=0.4$), which corresponds to a 53.5\% relative decrease versus baseline.
+In F1, PR-AUC deltas under C3 are small in magnitude, indicating that providing the engineered ratio largely removes the sensitivity.
+
+\input{tables/tab_main_body_c3_dgpA.tex}
+
+Figure \ref{fig:dgpA_rel_roc} provides a more complete sweep over $s$ and arms C1--C3.
+Appendix Figures \ref{fig:low_s_A}--\ref{fig:boundary} provide additional sweeps and diagnostics.
+Appendix Figure \ref{fig:app_dgpB_rel_pr} shows that the same qualitative pattern holds in DGP-B, with the strongest degradation under C3 at aggressive subsampling.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{assets/figA_dgpA_f0_dual_axis_rel_roc_auc.pdf}
+\caption{DGP-A (F0). Relative $\Delta$ROC-AUC (left axis) and $\Delta$\texttt{cooc\_path\_mean} (right axis) across $s$ and arms C1--C3.}
+\label{fig:dgpA_rel_roc}
+\end{figure}
+
+\section{Discussion}
+
+
+\subsection{What these results do and do not say}
+
+These experiments show a specific fragility.
+When the true signal is accessible mainly through a ratio-like cancellation interaction, intra-tree column subsampling can significantly reduce performance.
+The effect is visible even at mild settings.
+The effect largely disappears when the engineered ratio is present in the feature set.
+
+These results do not imply that intra-tree subsampling is always harmful.
+It can still reduce overfitting in other settings.
+This paper focuses on one interaction geometry that is common in practice.
+
+\subsection{Practical guidance}
+
+Practitioners often use column subsampling for speed and regularization.
+The results suggest simple safeguards.
+
+\begin{itemize}
+\item If a ratio or rate feature is important, include it explicitly.
+Do not rely on the model to always synthesize it from primitives.
+\item If engineered ratios are not available, start with \texttt{colsample\_\allowbreak bylevel=1.0} and \texttt{colsample\_\allowbreak bynode=1.0}.
+Tune other regularizers first.
+\item If intra-tree subsampling is needed, prefer mild values and validate carefully.
+Sensitivity is task dependent.
+\end{itemize}
+
+\subsection{Limitations and next steps}
+
+DGP-B appears to exhibit significant degradation in performance only at aggressive values of s. Future work should focus on better understanding heterogeneity in results across DGP-A and DGP-B.
+
+Effect sizes depend strongly on the subsampling rate.
+At mild subsampling ($s=0.8$--$0.9$), the largest PR-AUC drop in these results is about 0.010.
+When subsampling is more aggressive ($s=0.4$), the drop can reach about 0.090.
+This is not a large change in isolation.
+In many imbalanced classification applications, PR-AUC improvements of a few thousandths are operationally meaningful.
+In other settings, this magnitude can fall below decision noise.
+Therefore, the safest recommendation is empirical.
+If ratio-like structure is plausible, validate intra-tree subsampling choices against a baseline with $s=1.0$.
+
+Feature dimensionality matters for this mechanism.
+These experiments use 120 distractors.
+The effect is expected to strengthen when more distractors compete for split gain, or when the ratio needs to be expressed at shallow depths.
+This paper does not vary feature count.
+It treats this as an important extension.
+
+
+
+This draft studies two synthetic data generating processes.
+It uses mild subsampling levels.
+It uses a single model capacity per setting.
+A broader study could vary feature counts, depth, interaction order, and distributional shifts.
+It could also add real world datasets where ratios are known to matter.
+
+\section{Conclusion}
+
+Intra-tree column subsampling in XGBoost can hinder learning of ratio-like interactions from primitives.
+The effect appears in two cancellation-style synthetic tasks.
+Providing the engineered ratio largely removes the sensitivity.
+For applied work, this supports a conservative default.
+Either include key ratio features or avoid intra-tree subsampling when such structure is plausible.
+
+\clearpage
+\begin{thebibliography}{99}
+
+\bibitem[Chen and Guestrin(2016)]{chen2016xgboost}
+Tianqi Chen and Carlos Guestrin.
+\newblock XGBoost: A Scalable Tree Boosting System.
+\newblock In \emph{Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining}, 2016.
+
+\bibitem[Friedman(2001)]{friedman2001gbm}
+Jerome H. Friedman.
+\newblock Greedy Function Approximation: A Gradient Boosting Machine.
+\newblock \emph{The Annals of Statistics}, 29(5):1189--1232, 2001.
+
+\bibitem[Friedman(2002)]{friedman2002stochastic}
+Jerome H. Friedman.
+\newblock Stochastic Gradient Boosting.
+\newblock \emph{Computational Statistics \& Data Analysis}, 38(4):367--378, 2002.
+
+\bibitem[Breiman(2001)]{breiman2001rf}
+Leo Breiman.
+\newblock Random Forests.
+\newblock \emph{Machine Learning}, 45(1):5--32, 2001.
+
+\bibitem[Geurts et~al.(2006)]{geurts2006extratrees}
+Pierre Geurts, Damien Ernst, and Louis Wehenkel.
+\newblock Extremely Randomized Trees.
+\newblock \emph{Machine Learning}, 63(1):3--42, 2006.
+
+\bibitem[Ke et~al.(2017)]{ke2017lightgbm}
+Guolin Ke, Qi Meng, Thomas Finley, Taifeng Wang, Wei Chen, Weidong Ma, Qiwei Ye, and Tie-Yan Liu.
+\newblock LightGBM: A Highly Efficient Gradient Boosting Decision Tree.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2017.
+
+\bibitem[Aitchison(1982)]{aitchison1982compositional}
+John Aitchison.
+\newblock The Statistical Analysis of Compositional Data.
+\newblock \emph{Journal of the Royal Statistical Society. Series B (Methodological)}, 44(2):139--177, 1982.
+
+\bibitem[Hastie et~al.(2009)]{hastie2009esl}
+Trevor Hastie, Robert Tibshirani, and Jerome Friedman.
+\newblock \emph{The Elements of Statistical Learning: Data Mining, Inference, and Prediction}.
+\newblock Springer, 2nd edition, 2009.
+
+\end{thebibliography}
+
+\clearpage
+\appendix
+
+\section*{Appendix}
+This appendix provides additional sweeps, tables, and supporting definitions.
+
+\section{Comprehensive sweep figures and tables}
+\label{app:comp}
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.96\textwidth]{assets/figA_dgpB_f0_dual_axis_rel_pr_auc.pdf}
+\caption{DGP-B (F0). Relative $\Delta$PR-AUC (left axis) and $\Delta$\texttt{cooc\_path\_mean} (right axis) across $s$ and arms C1--C3.}
+\label{fig:app_dgpB_rel_pr}
+\end{figure}
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.96\textwidth]{assets/figA_dgpB_f0_dual_axis_rel_roc_auc.pdf}
+\caption{DGP-B (F0). Relative $\Delta$ROC-AUC (left axis) and $\Delta$\texttt{cooc\_path\_mean} (right axis) across $s$ and arms C1--C3.}
+\label{fig:app_dgpB_rel_roc}
+\end{figure}
+
+\input{tables/tab_app_v3_baseline.tex}
+
+\input{tables/tab_app_v3_f0.tex}
+
+\input{tables/tab_app_v3_f1.tex}
+
+
+\section{Formal definitions of the data generating processes}
+
+\subsection{DGP-A}
+
+Latents:
+\begin{align}
+U &\sim \mathcal{N}(0,\sigma_U^2), \\
+V &\sim \mathcal{N}(0,\sigma_V^2).
+\end{align}
+Primitives:
+\begin{align}
+\log a &= U + V + \epsilon_a, \\
+\log b &= U - V + \epsilon_b, \\
+\epsilon_a, \epsilon_b &\sim \mathcal{N}(0,\sigma_\epsilon^2).
+\end{align}
+Label:
+\begin{align}
+y &\sim \text{Bernoulli}\left(\sigma(\beta V)\right).
+\end{align}
+Control feature:
+\begin{align}
+r &= \log a - \log b.
+\end{align}
+
+\subsection{DGP-B}
+
+Exposure:
+\begin{align}
+\log E \sim \mathcal{N}(\mu_E, \sigma_E^2).
+\end{align}
+Signal:
+\begin{align}
+V \sim \mathcal{N}(0,\sigma_V^2).
+\end{align}
+Counts:
+\begin{align}
+A \mid E,V &\sim \text{NegBin}(\lambda_A, \phi), \quad \lambda_A = E \cdot \exp(V), \\
+B \mid E,V &\sim \text{NegBin}(\lambda_B, \phi), \quad \lambda_B = E \cdot \exp(-V).
+\end{align}
+Label:
+\begin{align}
+y &\sim \text{Bernoulli}\left(\sigma(\beta V)\right).
+\end{align}
+Control feature:
+\begin{align}
+r &= \log(A+s_0) - \log(B+s_0).
+\end{align}
+
+\section{Definition of the path co-usage metric}
+
+For a given tree and a given leaf, consider the set of split features on the path from the root to that leaf.
+Define an indicator that equals one if both target primitives appear on that path.
+Weight each leaf by its cover.
+Average across leaves and trees.
+This yields \texttt{cooc\_path\_mean}.
+
+This metric is structural.
+It is not a proof of internal computation.
+
+
+
+\section{Confidence intervals}
+\label{app:ci}
+
+Let $d_i$ be the paired delta for a fixed setting, computed against the matched C0 baseline.
+The reported estimate is the sample mean $\bar d = \frac{1}{n}\sum_{i=1}^n d_i$.
+Let $s_d$ be the sample standard deviation of the $d_i$ with \texttt{ddof}=1.
+The standard error is $\mathrm{SE}=s_d/\sqrt{n}$.
+The 95\% interval is $\bar d \pm 1.96\cdot \mathrm{SE}$.
+
+\section{Additional sweeps and plots}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{assets/figA1_dgpA_low_s_sweep.png}
+\caption{DGP-A low $s$ sweep. The sweep includes $s \in \{0.4,0.6,0.8,0.9\}$. The interaction synthesis setting F0 is more sensitive to stronger intra-tree subsampling.}
+\label{fig:low_s_A}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{assets/figA2_dgpB_low_s_sweep.png}
+\caption{DGP-B low $s$ sweep. The same qualitative pattern holds under the count plus exposure construction.}
+\label{fig:low_s_B}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{assets/figA3_dgpA_boundary_sweep_delta_prauc.png}
+\caption{DGP-A boundary sweep under C3. The ratio necessity setting varies the strength of nuisance cancellation. The drop in F0 is largest when the ratio is most necessary.}
+\label{fig:boundary}
+\end{figure}
+
+\end{document}
