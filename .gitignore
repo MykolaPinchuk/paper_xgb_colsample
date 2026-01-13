@@ -1,0 +1,33 @@
+outputs/results/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Local verification / scratch runs (keep public repo clean)
+outputs/aggregate/repro_*/
+outputs/comparison_*.csv
+
+# LaTeX build artifacts (paper/)
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.toc
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.synctex.gz
+paper/arxiv_src/
+# arXiv upload archives are tracked (see paper/arxiv_upload/)
+
+# Local notes (not tracked)
+.notes/
