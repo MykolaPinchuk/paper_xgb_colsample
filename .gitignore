@@ -26,6 +26,8 @@ paper/*.toc
 paper/*.fls
 paper/*.fdb_latexmk
 paper/*.synctex.gz
+paper/arxiv_src/
+# arXiv upload archives are tracked (see paper/arxiv_upload/)
 
 # Local notes (not tracked)
 .notes/
