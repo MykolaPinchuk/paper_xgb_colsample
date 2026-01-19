@@ -4,6 +4,8 @@ This repository rebuilds all tables/figures for `paper/main_v3.tex` and (optiona
 
 `paper/main_v3.pdf` is included as a convenience build output; it can be regenerated locally.
 
+### arXiv link: https://arxiv.org/abs/2601.08121
+
 ## Quickstart (rebuild tables/figures from shipped aggregates)
 
 1) Install Python dependencies:
